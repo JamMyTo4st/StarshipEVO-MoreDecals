@@ -320,12 +320,17 @@ namespace MoreDecals
                     tmps.Add(tmp);
                 }
 
-                // GPU copies of every vanilla layer and mip, then the glyphs.
+                // v0.1.4: copy every layer, then re-upload the whole array from its CPU copy. v0.1.3 relied on the
+                // GPU copy alone and blocks/decals rendered dark and flat in game (the GPU-side mips did not line
+                // up, e.g. with a reduced texture quality setting). Both textures are readable, so CopyTexture
+                // also copies the CPU data, and Apply() makes the full-resolution CPU data the source of truth.
                 for (int l = 0; l < baseLayer; l++) Graphics.CopyTexture(src, l, dst, l);
                 for (int i = 0; i < tmps.Count; i++) Graphics.CopyTexture(tmps[i], 0, dst, baseLayer + i);
                 Cleanup(tmps);
+                dst.Apply(false, false);
+                Plugin.V($"[Inject] uploaded from CPU data. masterTextureLimit={QualitySettings.masterTextureLimit}");
 
-                // Verify on the GPU: read back the smallest mip of a few vanilla layers and compare with the CPU copy.
+                // Verify: read back mip 0, 1 and 4 of a few vanilla layers from the GPU and compare with the CPU data.
                 if (src.isReadable && !VerifySample(src, dst, baseLayer, out why)) { Abort("verification failed: " + why); return; }
 
                 for (int i = 0; i < list.Count; i++) list[i].Layer = baseLayer + i;
@@ -350,7 +355,15 @@ namespace MoreDecals
         static bool VerifySample(Texture2DArray src, Texture2DArray dst, int baseLayer, out string why)
         {
             why = null;
-            int mip = Math.Max(0, Math.Min(src.mipmapCount - 1, 4)); int sz = Math.Max(1, 256 >> mip);
+            foreach (int mip in new[] { 0, 1, 4 })
+                if (mip < src.mipmapCount && !VerifyMip(src, dst, baseLayer, mip, out why)) return false;
+            return true;
+        }
+
+        static bool VerifyMip(Texture2DArray src, Texture2DArray dst, int baseLayer, int mip, out string why)
+        {
+            why = null;
+            int sz = Math.Max(1, 256 >> mip);
             var rt = RenderTexture.GetTemporary(sz, sz, 0, RenderTextureFormat.ARGB32, src.graphicsFormat.ToString().Contains("SRGB") ? RenderTextureReadWrite.sRGB : RenderTextureReadWrite.Linear);
             var read = new Texture2D(sz, sz, TextureFormat.RGBA32, false, !src.graphicsFormat.ToString().Contains("SRGB"));
             var prev = RenderTexture.active;
@@ -365,10 +378,11 @@ namespace MoreDecals
                     RenderTexture.active = rt;
                     read.ReadPixels(new Rect(0, 0, sz, sz), 0, 0); read.Apply();
                     var a = src.GetPixels32(l, mip); var b = read.GetPixels32();
-                    long diff = 0; for (int i = 0; i < a.Length; i++) diff += Math.Abs(a[i].r - b[i].r) + Math.Abs(a[i].g - b[i].g) + Math.Abs(a[i].b - b[i].b);
+                    long diff = 0, adiff = 0; for (int i = 0; i < a.Length; i++) { diff += Math.Abs(a[i].r - b[i].r) + Math.Abs(a[i].g - b[i].g) + Math.Abs(a[i].b - b[i].b); adiff += Math.Abs(a[i].a - b[i].a); }
                     double avg = diff / (3.0 * a.Length);
-                    Plugin.V($"[Inject] verify layer {l} mip {mip}: mean diff {avg:F2}");
-                    if (avg > 8) { why = $"layer {l} differs (mean {avg:F1})"; return false; }
+                    double aavg = adiff / (double)a.Length;
+                    Plugin.V($"[Inject] verify layer {l} mip {mip}: mean diff rgb {avg:F2} alpha {aavg:F2}");
+                    if (avg > 8 || aavg > 8) { why = $"layer {l} mip {mip} differs (rgb {avg:F1}, alpha {aavg:F1})"; return false; }
                 }
                 return true;
             }
