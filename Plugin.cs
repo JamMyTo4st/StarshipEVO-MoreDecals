@@ -41,17 +41,25 @@ namespace MoreDecals
             // GameResourcesManager.AllocateResources(). TabSchematics..cctor then threw a NullReferenceException
             // (ItemInstanceResources not allocated yet), every schematic/help type stayed broken, and saves loaded
             // into an empty "void". All patches are now applied only after the game finished loading its codex.
+            UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
+            EnsureRunner();
             Log.LogInfo($"MoreDecals {MyPluginInfo.PLUGIN_VERSION} loaded, waiting for game resources. Built-in={Glyphs.BuiltInCount} custom={Glyphs.CustomCount} PickerKey={PickerKey.Value} InjectTextures={InjectTextures.Value}");
         }
 
         static bool started;
+        internal static bool Started => started;
         static readonly FieldInfo codexLoaded = AccessTools.Field(typeof(ResourcesLoader), "codexLoaded");
 
-        void StartWhenLoaded()
+        static void StartWhenLoaded()
         {
             if (started) return;
             if (codexLoaded == null) { started = true; Log.LogError("[Start] ResourcesLoader.codexLoaded not found; MoreDecals stays inactive."); return; }
-            if (!(bool)codexLoaded.GetValue(null) || ResourcesLoader.VOXEL_DIFFUSE == null) return;
+            bool codex = (bool)codexLoaded.GetValue(null), tex = ResourcesLoader.VOXEL_DIFFUSE != null;
+            if (!codex || !tex)
+            {
+                if (Time.realtimeSinceStartup >= nextWaitLog) { nextWaitLog = Time.realtimeSinceStartup + 10f; Log.LogInfo($"[Start] waiting: codexLoaded={codex} VOXEL_DIFFUSE={(tex ? "set" : "null")}"); }
+                return;
+            }
             started = true;
             if (TabDecals.DECAL_FACTION_CUSTOM_1 == null || TabDecals.DECAL_FACTION_CUSTOM_1.ItemID != Glyphs.Bank0)
             { Log.LogError($"[Start] Faction custom decal 1 is not brick {Glyphs.Bank0}; MoreDecals stays inactive."); return; }
@@ -75,14 +83,54 @@ namespace MoreDecals
 
         internal static void V(string s) { if (Verbose.Value) Log.LogInfo(s); }
 
-        private void Update()
+        // v0.1.2: the BepInEx manager GameObject does not get Update() in this game (v0.1.1 never got past
+        // "waiting"), so polling runs on our own hidden, persistent GameObject, plus a sceneLoaded callback.
+        static float nextWaitLog, nextErrLog;
+        internal static void Tick()
         {
-            if (!Enabled.Value) return;
-            if (!started) { try { StartWhenLoaded(); } catch (Exception e) { started = true; Log.LogError("[Start] failed, MoreDecals stays inactive: " + e); } }
-            if (Input.GetKeyDown(PickerKey.Value)) Picker.Open = !Picker.Open;
+            if (!Enabled.Value || started) return;
+            try { StartWhenLoaded(); }
+            catch (Exception e) { if (Time.realtimeSinceStartup >= nextErrLog) { nextErrLog = Time.realtimeSinceStartup + 10f; Log.LogError("[Start] poller exception (will retry): " + e); } }
         }
 
-        private void OnGUI() { if (Enabled.Value && started) Picker.Draw(); }
+        static void OnSceneLoaded(UnityEngine.SceneManagement.Scene sc, UnityEngine.SceneManagement.LoadSceneMode m)
+        {
+            V($"[Start] scene loaded: {sc.name}");
+            EnsureRunner();
+            Tick();
+        }
+
+        static GameObject runnerGo;
+        internal static void EnsureRunner()
+        {
+            if (runnerGo != null) return;
+            runnerGo = new GameObject("MoreDecals_Runner") { hideFlags = HideFlags.HideAndDontSave };
+            DontDestroyOnLoad(runnerGo);
+            runnerGo.AddComponent<Runner>();
+            V("[Start] runner object created.");
+        }
+    }
+
+    internal sealed class Runner : MonoBehaviour
+    {
+        bool loggedFirst;
+        void Update()
+        {
+            if (!loggedFirst) { loggedFirst = true; Plugin.V("[Start] runner Update is running."); }
+            Plugin.Tick();
+            if (!Plugin.Enabled.Value) return;
+            try
+            {
+                if (Input.GetKeyDown(Plugin.PickerKey.Value))
+                {
+                    if (!Plugin.Started) Plugin.Log.LogWarning("[Picker] F8 pressed but MoreDecals is not ready yet (see the [Start] waiting lines).");
+                    else { Picker.Open = !Picker.Open; Plugin.Log.LogInfo(Picker.Open ? "[Picker] opened" : "[Picker] closed"); }
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogError("[Picker] key check failed: " + e.Message); }
+        }
+        void OnGUI() { if (Plugin.Enabled.Value && Plugin.Started) Picker.Draw(); }
+        void OnDestroy() { Plugin.Log.LogWarning("[Start] runner object destroyed; it will be recreated on the next scene load."); }
     }
 
     internal sealed class Glyph
@@ -374,7 +422,7 @@ namespace MoreDecals
             bd.brickId = bank;
             bd.scale = (ushort)((bd.scale & 0x0FFF) | (local << 12));
             ActionBuild.brickData = bd;
-            Plugin.V($"[Build] placing variant {Picker.Selected} as brick {bank} slot {local}.");
+            Plugin.Log.LogInfo($"[Place] glyph {Picker.Selected} written to brick {bank} slot {local} (scale=0x{bd.scale:X4}).");
         }
     }
 
@@ -390,7 +438,7 @@ namespace MoreDecals
             bd.brickId = bank;
             bd.scale = (ushort)((bd.scale & 0x0FFF) | (local << 12));
             data.brickData = bd;
-            Plugin.V($"[Build] placing variant {Picker.Selected} as brick {bank} slot {local} (fallback).");
+            Plugin.Log.LogInfo($"[Place] glyph {Picker.Selected} written to brick {bank} slot {local} (scale=0x{bd.scale:X4}, fallback).");
         }
     }
 
@@ -442,7 +490,7 @@ namespace MoreDecals
         static void DrawWindow(int _)
         {
             GUILayout.Label("Pick a decal, then hold any Codex Decals > FACTION #1-#4 decal and build as usual.");
-            if (GUILayout.Button(Selected == 0 ? "> None (vanilla Faction decal)" : "None (vanilla Faction decal)")) Selected = 0;
+            if (GUILayout.Button(Selected == 0 ? "> None (vanilla Faction decal)" : "None (vanilla Faction decal)")) { Selected = 0; Plugin.Log.LogInfo("[Picker] selected none (vanilla)"); }
             scroll = GUILayout.BeginScrollView(scroll);
             Section("Built-in", 1, Glyphs.BuiltInMax);
             Section("Custom (BepInEx/plugins/MoreDecals/Custom)", Glyphs.CustomFirst, Glyphs.MaxId);
@@ -459,7 +507,7 @@ namespace MoreDecals
                 var g = Glyphs.ById[id]; if (g == null) continue;
                 var prev = GUI.backgroundColor;
                 if (Selected == id) GUI.backgroundColor = Color.cyan;
-                if (GUILayout.Button(new GUIContent(g.Tex, g.Name), GUILayout.Width(64), GUILayout.Height(64))) Selected = id;
+                if (GUILayout.Button(new GUIContent(g.Tex, g.Name), GUILayout.Width(64), GUILayout.Height(64))) { Selected = id; Plugin.Log.LogInfo($"[Picker] selected glyph {id} ({g.Name})"); }
                 GUI.backgroundColor = prev;
                 if (++col == 8) { col = 0; GUILayout.EndHorizontal(); GUILayout.BeginHorizontal(); }
             }

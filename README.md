@@ -2,7 +2,7 @@
 
 A BepInEx 5 mod that adds 48 built-in decals (letters A-Z, digits 0-9 and 12 symbols) and lets you add up to 12 of your own PNG decals. It adds **no new brick ids**: a modded decal is saved as one of the vanilla FACTION #1-#4 decals, so saves and blueprints still load for players without the mod.
 
-> ⚠️ **NOT yet tested in-game (v0.1.1).** v0.1.0 broke saves (empty "void" world), v0.1.1 fixes the cause, see the changelog. **** Game updates may break it. Back up your saves first.
+> ⚠️ **NOT yet tested in-game (v0.1.2).** v0.1.0 broke saves (empty "void" world), v0.1.1 fixes the cause, see the changelog. **** Game updates may break it. Back up your saves first.
 
 ![preview](MoreDecals-preview.png)
 
@@ -49,24 +49,28 @@ The glyph number travels with the brick in the game's normal brick sync, so noth
 ## Requirements and install
 
 - Starship EVO (Steam) and [BepInEx 5.4.x](https://github.com/BepInEx/BepInEx/releases) (x64).
-- Extract `MoreDecals-v0.1.1.zip` into the game folder, so you get `BepInEx/plugins/MoreDecals/MoreDecals.dll`.
+- Extract `MoreDecals-v0.1.2.zip` into the game folder, so you get `BepInEx/plugins/MoreDecals/MoreDecals.dll`.
 
 ## Check that it works
 
 `BepInEx/LogOutput.log` should contain, in this order:
 
 ```
-MoreDecals 0.1.1 loaded, waiting for game resources. Built-in=48 custom=0 PickerKey=F8 InjectTextures=True
-[Patch] Patch_SetDecal applied.   (and the other patches; these appear only once the game has loaded)
+MoreDecals 0.1.2 loaded, waiting for game resources. ...
+[Start] waiting: codexLoaded=... VOXEL_DIFFUSE=...    (every 10 s until ready, maybe never shown)
+[Patch] Patch_SetDecal applied.   (and the other patches)
 [Start] game resources ready, patched 4 methods.
-[Inject] MAIN_TEX 256x256 layers=... format=... gfx=... mips=...
 [Inject] OK: added 48 decal layers (...), normalId=...
+[Picker] opened / [Picker] selected glyph N (name)
+[Place] glyph N written to brick 309 slot S (scale=0x....)
 ```
 
 If you see `[Inject] ABORTED ... Reason: ...`, the world stays vanilla and modded decals keep the FACTION placeholder. Please report that line.
 In `Player.log`, there must be **no** `The type initializer for 'VoxelEngine.TabSchematics' threw an exception`. If there is, remove the mod and report it.
 
 ## Changelog
+
+- **0.1.2**: v0.1.1 never got past "waiting for game resources" (the BepInEx manager object gets no Update() in this game), so F8 and placing did nothing. Polling now runs on its own hidden persistent object plus a scene-loaded callback, logs what it is waiting for every 10 s, and logs poller exceptions. Added `[Picker]` and `[Place]` log lines.
 
 - **0.1.1**: Fixed loading a save into an empty "void" world. v0.1.0 patched `ResourcesLoader.Awake`. That made the game build its schematics list before its item data existed (`TabSchematics` NullReferenceException). Patches are now applied only after the game has loaded. The texture step now runs a self-check and aborts safely (`InjectTextures` switch). The game's `VOXEL_DIFFUSE` array is no longer replaced. Placing decals has a fallback if the build patch fails to compile.
 - **0.1.0**: First build.

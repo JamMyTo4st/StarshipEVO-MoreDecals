@@ -3,7 +3,7 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <AssemblyName>MoreDecals</AssemblyName>
     <Product>Starship EVO More Decals</Product>
-    <Version>0.1.1</Version>
+    <Version>0.1.2</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
     <BepInExPluginGuid>com.jammytoast.starshipevo.moredecals</BepInExPluginGuid>
