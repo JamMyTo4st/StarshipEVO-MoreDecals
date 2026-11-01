@@ -50,14 +50,34 @@ namespace MoreDecals
         internal static bool Started => started;
         static readonly FieldInfo codexLoaded = AccessTools.Field(typeof(ResourcesLoader), "codexLoaded");
 
+        // v0.1.3: v0.1.2 patched while AssetRepoLoader.Start was still loading the asset repos. Compiling the
+        // patched ActionBuild methods ran UI_HelpMessagesRepo's static constructor before AssetRepoIcons had
+        // filled ActionsSpritesMapping, so it threw, the type stayed broken for the session, and the world
+        // never finished loading (void + smoke). Now we wait until every repo has loaded and the icon
+        // mapping exists, and never touch game UI types before that.
+        static readonly FieldInfo repoList = AccessTools.Field(typeof(Manager.AssetRepoLoader), "Resources");
+        static readonly FieldInfo repoNames = AccessTools.Field(typeof(Manager.AssetRepoLoader), "ResourcesNames");
+        static readonly FieldInfo iconMap = AccessTools.Field(typeof(Manager.AssetRepoIcons), "ActionsSpritesMapping");
+        static bool ReposLoaded(out string state)
+        {
+            if (repoList == null || repoNames == null || iconMap == null) { state = "fields-missing"; return false; }
+            var list = repoList.GetValue(null) as System.Collections.ICollection;
+            var names = repoNames.GetValue(null) as System.Collections.ICollection;
+            bool icons = iconMap.GetValue(null) != null;
+            int a = list?.Count ?? -1, b = names?.Count ?? -1;
+            state = $"{b}/{a} icons={(icons ? "set" : "null")}";
+            return list != null && names != null && a > 0 && b >= a && icons;
+        }
+
         static void StartWhenLoaded()
         {
             if (started) return;
             if (codexLoaded == null) { started = true; Log.LogError("[Start] ResourcesLoader.codexLoaded not found; MoreDecals stays inactive."); return; }
             bool codex = (bool)codexLoaded.GetValue(null), tex = ResourcesLoader.VOXEL_DIFFUSE != null;
-            if (!codex || !tex)
+            bool repos = ReposLoaded(out string repoState);
+            if (!codex || !tex || !repos)
             {
-                if (Time.realtimeSinceStartup >= nextWaitLog) { nextWaitLog = Time.realtimeSinceStartup + 10f; Log.LogInfo($"[Start] waiting: codexLoaded={codex} VOXEL_DIFFUSE={(tex ? "set" : "null")}"); }
+                if (Time.realtimeSinceStartup >= nextWaitLog) { nextWaitLog = Time.realtimeSinceStartup + 10f; Log.LogInfo($"[Start] waiting: codexLoaded={codex} VOXEL_DIFFUSE={(tex ? "set" : "null")} repos={repoState}"); }
                 return;
             }
             started = true;
