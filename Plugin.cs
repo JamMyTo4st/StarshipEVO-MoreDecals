@@ -43,7 +43,7 @@ namespace MoreDecals
             // into an empty "void". All patches are now applied only after the game finished loading its codex.
             UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
             EnsureRunner();
-            Log.LogInfo($"MoreDecals {MyPluginInfo.PLUGIN_VERSION} loaded, waiting for game resources. Built-in={Glyphs.BuiltInCount} custom={Glyphs.CustomCount} PickerKey={PickerKey.Value} InjectTextures={InjectTextures.Value}");
+            Log.LogInfo($"MoreDecals {MyPluginInfo.PLUGIN_VERSION}-{Alt.Tag} loaded, waiting for game resources. Built-in={Glyphs.BuiltInCount} custom={Glyphs.CustomCount} PickerKey={PickerKey.Value} InjectTextures={InjectTextures.Value}");
         }
 
         static bool started;
@@ -97,7 +97,7 @@ namespace MoreDecals
             }
             int n = 0; foreach (var _ in h.GetPatchedMethods()) n++;
             Log.LogInfo($"[Start] game resources ready, patched {n} methods.");
-            if (InjectTextures.Value) Inject.Run();
+            if (InjectTextures.Value) Alt.Run();
             else Log.LogInfo("[Inject] skipped (InjectTextures=false); modded decals show the vanilla Faction placeholder.");
         }
 
@@ -434,7 +434,7 @@ namespace MoreDecals
                 return;
             }
             var d = DecalRendererResources.datas[__result];
-            d.textureId = g.Layer;
+            if (!Alt.Apply(ref d, g, brickData)) return;
             if (Glyphs.NormalId != int.MinValue) d.normalId = Glyphs.NormalId;
             DecalRendererResources.datas[__result] = d;
             DecalRendererResources.SetMinMax(__result);
