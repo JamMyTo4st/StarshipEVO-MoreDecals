@@ -22,7 +22,7 @@ namespace MoreDecals
     public class Plugin : BaseUnityPlugin
     {
         internal static ManualLogSource Log;
-        internal static ConfigEntry<bool> Enabled, Verbose;
+        internal static ConfigEntry<bool> Enabled, Verbose, InjectTextures;
         internal static ConfigEntry<KeyCode> PickerKey;
         internal static string PluginDir;
 
@@ -32,27 +32,57 @@ namespace MoreDecals
             PluginDir = Path.GetDirectoryName(Info.Location);
             Enabled = Config.Bind("Decals", "Enabled", true, "Load the extra decals, render them and allow placing them. Off: modded decals show the vanilla Faction placeholder.");
             PickerKey = Config.Bind("Decals", "PickerKey", KeyCode.F8, "Key that opens/closes the More Decals picker window.");
+            InjectTextures = Config.Bind("Decals", "InjectTextures", true, "Add the decal images to the game's block texture array (after a strict self-check). Off: nothing texture related is touched and modded decals show the vanilla Faction placeholder.");
             Verbose = Config.Bind("Debug", "VerboseLogging", true, "Log loading, placement and rendering details to BepInEx/LogOutput.log.");
             Glyphs.LoadAll();
             if (!Enabled.Value) { Log.LogInfo("MoreDecals disabled in config."); return; }
+            // v0.1.1: nothing is patched here. Patching ResourcesLoader.Awake in v0.1.0 made Mono run the static
+            // constructor of TabSchematics when the patched Awake was compiled, i.e. BEFORE
+            // GameResourcesManager.AllocateResources(). TabSchematics..cctor then threw a NullReferenceException
+            // (ItemInstanceResources not allocated yet), every schematic/help type stayed broken, and saves loaded
+            // into an empty "void". All patches are now applied only after the game finished loading its codex.
+            Log.LogInfo($"MoreDecals {MyPluginInfo.PLUGIN_VERSION} loaded, waiting for game resources. Built-in={Glyphs.BuiltInCount} custom={Glyphs.CustomCount} PickerKey={PickerKey.Value} InjectTextures={InjectTextures.Value}");
+        }
+
+        static bool started;
+        static readonly FieldInfo codexLoaded = AccessTools.Field(typeof(ResourcesLoader), "codexLoaded");
+
+        void StartWhenLoaded()
+        {
+            if (started) return;
+            if (codexLoaded == null) { started = true; Log.LogError("[Start] ResourcesLoader.codexLoaded not found; MoreDecals stays inactive."); return; }
+            if (!(bool)codexLoaded.GetValue(null) || ResourcesLoader.VOXEL_DIFFUSE == null) return;
+            started = true;
+            if (TabDecals.DECAL_FACTION_CUSTOM_1 == null || TabDecals.DECAL_FACTION_CUSTOM_1.ItemID != Glyphs.Bank0)
+            { Log.LogError($"[Start] Faction custom decal 1 is not brick {Glyphs.Bank0}; MoreDecals stays inactive."); return; }
             var h = new Harmony(MyPluginInfo.PLUGIN_GUID);
-            foreach (var t in new[] { typeof(Patch_ResourcesLoaderAwake), typeof(Patch_SetDecal), typeof(Patch_BuildLeftClickUp), typeof(Patch_Symmetry), typeof(Patch_BuildOnSelection) })
+            foreach (var t in new[] { typeof(Patch_SetDecal), typeof(Patch_BuildLeftClickUp), typeof(Patch_Symmetry), typeof(Patch_BuildOnSelection) })
             {
                 try { h.CreateClassProcessor(t).Patch(); Log.LogInfo($"[Patch] {t.Name} applied."); }
                 catch (Exception e) { Log.LogError($"[Patch] {t.Name} FAILED: {e.Message}"); }
             }
+            if (!Patch_BuildLeftClickUp.Applied)
+            {
+                // v0.1.0 logged "IL Compile Error" here. Fallback: encode on the build action sent to the network.
+                try { h.CreateClassProcessor(typeof(Patch_LocalVoxelAction)).Patch(); Log.LogInfo("[Patch] Patch_LocalVoxelAction applied (fallback)."); }
+                catch (Exception e) { Log.LogError("[Patch] Patch_LocalVoxelAction FAILED, placing modded decals is unavailable: " + e.Message); }
+            }
             int n = 0; foreach (var _ in h.GetPatchedMethods()) n++;
-            Log.LogInfo($"MoreDecals {MyPluginInfo.PLUGIN_VERSION} loaded, patched {n} methods. Built-in={Glyphs.BuiltInCount} custom={Glyphs.CustomCount} PickerKey={PickerKey.Value}");
+            Log.LogInfo($"[Start] game resources ready, patched {n} methods.");
+            if (InjectTextures.Value) Inject.Run();
+            else Log.LogInfo("[Inject] skipped (InjectTextures=false); modded decals show the vanilla Faction placeholder.");
         }
 
         internal static void V(string s) { if (Verbose.Value) Log.LogInfo(s); }
 
         private void Update()
         {
-            if (Enabled.Value && Input.GetKeyDown(PickerKey.Value)) Picker.Open = !Picker.Open;
+            if (!Enabled.Value) return;
+            if (!started) { try { StartWhenLoaded(); } catch (Exception e) { started = true; Log.LogError("[Start] failed, MoreDecals stays inactive: " + e); } }
+            if (Input.GetKeyDown(PickerKey.Value)) Picker.Open = !Picker.Open;
         }
 
-        private void OnGUI() { if (Enabled.Value) Picker.Draw(); }
+        private void OnGUI() { if (Enabled.Value && started) Picker.Draw(); }
     }
 
     internal sealed class Glyph
@@ -76,14 +106,15 @@ namespace MoreDecals
         public static int NormalId = int.MinValue; // decided at injection
         static readonly HashSet<int> warned = new HashSet<int>();
 
-        public static ushort BankBrick(int bank) => (ushort)(TabDecals.DECAL_FACTION_CUSTOM_1.ItemID + bank);
-        public static bool IsBankBrick(int brickId) { int b = (int)TabDecals.DECAL_FACTION_CUSTOM_1.ItemID; return brickId >= b && brickId < b + 4; }
+        public const int Bank0 = 309; // TabDecals.DECAL_FACTION_CUSTOM_1, verified at start (never touch TabDecals early)
+        public static ushort BankBrick(int bank) => (ushort)(Bank0 + bank);
+        public static bool IsBankBrick(int brickId) => brickId >= Bank0 && brickId < Bank0 + 4;
         public static int Encode(int id, out ushort brickId) { brickId = BankBrick((id - 1) / 15); return (id - 1) % 15 + 1; }
         public static int Decode(BrickInstanceData bd)
         {
             int local = bd.scale >> 12;
             if (local == 0 || !IsBankBrick(bd.brickId)) return 0;
-            return (bd.brickId - (int)TabDecals.DECAL_FACTION_CUSTOM_1.ItemID) * 15 + local;
+            return (bd.brickId - Bank0) * 15 + local;
         }
         public static void WarnOnce(int id, string msg) { if (warned.Add(id)) Plugin.Log.LogWarning(msg); }
 
@@ -157,57 +188,123 @@ namespace MoreDecals
     }
 
     // ---------- Texture injection: append the glyphs as extra layers of the voxel diffuse array (MAIN_TEX) ----------
-    [HarmonyPatch(typeof(ResourcesLoader), "Awake")]
-    internal static class Patch_ResourcesLoaderAwake
+    // Texture injection, run once after the game loaded. MAIN_TEX is bound once by ResourcesLoader.Awake
+    // (Shader.SetGlobalTexture) and read by every block/decal shader; no material holds it directly
+    // (ta_voxelDiffuse/VOXEL_DIFFUSE are the only other references and stay the vanilla array for CPU readers).
+    // A bad copy would blank every block, so every property is checked first and any doubt aborts.
+    internal static class Inject
     {
-        static bool done;
-        static void Postfix(ResourcesLoader __instance)
+        static string Check(Texture2DArray src, Texture2DArray dst)
         {
-            if (done) return;
-            done = true;
-            try { Inject(__instance); }
-            catch (Exception e) { Plugin.Log.LogError("[Inject] failed, modded decals will show the vanilla placeholder: " + e); }
+            if (dst.width != src.width || dst.height != src.height) return "size differs";
+            if (dst.format != src.format) return $"format {dst.format} != {src.format}";
+            if (dst.graphicsFormat != src.graphicsFormat) return $"graphicsFormat {dst.graphicsFormat} != {src.graphicsFormat} (sRGB/linear)";
+            if (dst.mipmapCount != src.mipmapCount) return $"mips {dst.mipmapCount} != {src.mipmapCount}";
+            if (dst.filterMode != src.filterMode || dst.anisoLevel != src.anisoLevel || dst.wrapModeU != src.wrapModeU || dst.wrapModeV != src.wrapModeV || dst.wrapModeW != src.wrapModeW) return "sampler state differs";
+            return null;
         }
 
-        static void Inject(ResourcesLoader loader)
+        internal static void Run()
         {
-            var src = ResourcesLoader.VOXEL_DIFFUSE;
-            if (src == null) { Plugin.Log.LogError("[Inject] VOXEL_DIFFUSE is null."); return; }
-            Plugin.Log.LogInfo($"[Inject] MAIN_TEX {src.width}x{src.height} layers={src.depth} format={src.format} gfx={src.graphicsFormat} mips={src.mipmapCount} readable={src.isReadable}");
-            if (src.width != 256 || src.height != 256) { Plugin.Log.LogError("[Inject] unexpected MAIN_TEX size."); return; }
-            if (!Encoder.Supported(src.format)) { Plugin.Log.LogError($"[Inject] texture format {src.format} not supported by the encoder."); return; }
-            var list = Glyphs.ById.Where(g => g != null).ToList();
-            int baseLayer = src.depth;
-            if (baseLayer + list.Count > 2048) { Plugin.Log.LogError("[Inject] too many layers."); return; }
-            var flags = src.mipmapCount > 1 ? UnityEngine.Experimental.Rendering.TextureCreationFlags.MipChain : UnityEngine.Experimental.Rendering.TextureCreationFlags.None;
-            var dst = new Texture2DArray(src.width, src.height, baseLayer + list.Count, src.graphicsFormat, flags, src.mipmapCount)
+            Texture2DArray dst = null;
+            try
             {
-                name = src.name + "_MoreDecals", wrapMode = src.wrapMode, filterMode = src.filterMode, anisoLevel = src.anisoLevel, mipMapBias = src.mipMapBias
-            };
-            // GPU-side copies only: the vanilla array keeps its CPU copy (VOXEL_DIFFUSE stays the original for
-            // CPU readers such as decal hit tests), the new array is only bound as the MAIN_TEX shader global.
-            for (int l = 0; l < baseLayer; l++) Graphics.CopyTexture(src, l, dst, l);
-            for (int i = 0; i < list.Count; i++)
-            {
-                var g = list[i];
-                var raw = new List<byte>();
-                for (int m = 0; m < src.mipmapCount; m++)
+                var src = ResourcesLoader.VOXEL_DIFFUSE;
+                var loader = UnityEngine.Object.FindObjectOfType<ResourcesLoader>();
+                Plugin.Log.LogInfo($"[Inject] MAIN_TEX {src.width}x{src.height} layers={src.depth} format={src.format} gfx={src.graphicsFormat} mips={src.mipmapCount} readable={src.isReadable} copySupport={SystemInfo.copyTextureSupport}");
+                string why = null;
+                if (Shader.GetGlobalTexture("MAIN_TEX") != src) why = "MAIN_TEX global is not VOXEL_DIFFUSE (another mod or game change)";
+                else if (src.width != 256 || src.height != 256) why = "unexpected MAIN_TEX size";
+                else if (!Encoder.Supported(src.format)) why = $"texture format {src.format} not supported by the encoder";
+                else if ((SystemInfo.copyTextureSupport & UnityEngine.Rendering.CopyTextureSupport.DifferentTypes) == 0) why = "GPU cannot copy Texture2D -> Texture2DArray";
+                var list = Glyphs.ById.Where(g => g != null).ToList();
+                int baseLayer = src.depth;
+                if (why == null && baseLayer + list.Count > 2048) why = "too many layers";
+                if (why == null && list.Count == 0) why = "no decals loaded";
+                if (why != null) { Abort(why); return; }
+
+                var flags = src.mipmapCount > 1 ? UnityEngine.Experimental.Rendering.TextureCreationFlags.MipChain : UnityEngine.Experimental.Rendering.TextureCreationFlags.None;
+                dst = new Texture2DArray(src.width, src.height, baseLayer + list.Count, src.graphicsFormat, flags, src.mipmapCount)
                 {
-                    int s = Math.Max(1, 256 >> m);
-                    Color32[] px = m < g.Tex.mipmapCount ? g.Tex.GetPixels32(m) : new Color32[s * s];
-                    raw.AddRange(Encoder.Encode(px, s, src.format));
+                    name = src.name + "_MoreDecals", filterMode = src.filterMode, anisoLevel = src.anisoLevel, mipMapBias = src.mipMapBias,
+                    wrapModeU = src.wrapModeU, wrapModeV = src.wrapModeV, wrapModeW = src.wrapModeW
+                };
+                if ((why = Check(src, dst)) != null) { Abort(why); return; }
+
+                // Build every glyph first (CPU), so nothing is half done if one fails.
+                var tmps = new List<Texture2D>();
+                int bytesPerLayer = -1;
+                foreach (var g in list)
+                {
+                    var raw = new List<byte>();
+                    for (int m = 0; m < src.mipmapCount; m++)
+                    {
+                        int sz = Math.Max(1, 256 >> m);
+                        Color32[] px = m < g.Tex.mipmapCount ? g.Tex.GetPixels32(m) : new Color32[sz * sz];
+                        raw.AddRange(Encoder.Encode(px, sz, src.format));
+                    }
+                    var tmp = new Texture2D(256, 256, src.graphicsFormat, src.mipmapCount, flags);
+                    if (tmp.format != src.format || tmp.mipmapCount != src.mipmapCount) { tmps.Add(tmp); Cleanup(tmps); Abort($"glyph texture came out {tmp.format}/{tmp.mipmapCount} mips"); return; }
+                    if (bytesPerLayer < 0) bytesPerLayer = tmp.GetRawTextureData<byte>().Length;
+                    if (raw.Count != bytesPerLayer) { tmps.Add(tmp); Cleanup(tmps); Abort($"encoded size {raw.Count} != {bytesPerLayer} bytes for '{g.Name}'"); return; }
+                    tmp.LoadRawTextureData(raw.ToArray());
+                    tmp.Apply(false, false);
+                    tmps.Add(tmp);
                 }
-                var tmp = new Texture2D(256, 256, src.graphicsFormat, src.mipmapCount, flags);
-                tmp.LoadRawTextureData(raw.ToArray());
-                tmp.Apply(false, true);
-                Graphics.CopyTexture(tmp, 0, dst, baseLayer + i);
-                UnityEngine.Object.Destroy(tmp);
-                g.Layer = baseLayer + i;
+
+                // GPU copies of every vanilla layer and mip, then the glyphs.
+                for (int l = 0; l < baseLayer; l++) Graphics.CopyTexture(src, l, dst, l);
+                for (int i = 0; i < tmps.Count; i++) Graphics.CopyTexture(tmps[i], 0, dst, baseLayer + i);
+                Cleanup(tmps);
+
+                // Verify on the GPU: read back the smallest mip of a few vanilla layers and compare with the CPU copy.
+                if (src.isReadable && !VerifySample(src, dst, baseLayer, out why)) { Abort("verification failed: " + why); return; }
+
+                for (int i = 0; i < list.Count; i++) list[i].Layer = baseLayer + i;
+                Shader.SetGlobalTexture("MAIN_TEX", dst);
+                if (loader != null) Glyphs.NormalId = PickFlatNormal(loader);
+                Plugin.Log.LogInfo($"[Inject] OK: added {list.Count} decal layers ({baseLayer}..{baseLayer + list.Count - 1}), normalId={Glyphs.NormalId}.");
+                dst = null;
             }
-            loader.ta_voxelDiffuse = dst;
-            Shader.SetGlobalTexture("MAIN_TEX", dst);
-            Glyphs.NormalId = PickFlatNormal(loader);
-            Plugin.Log.LogInfo($"[Inject] added {list.Count} decal layers ({baseLayer}..{baseLayer + list.Count - 1}), normalId={Glyphs.NormalId}.");
+            catch (Exception e) { Abort("exception: " + e); }
+            finally { if (dst != null) UnityEngine.Object.Destroy(dst); }
+        }
+
+        static void Cleanup(List<Texture2D> t) { foreach (var x in t) UnityEngine.Object.Destroy(x); t.Clear(); }
+
+        static void Abort(string why)
+        {
+            foreach (var g in Glyphs.ById) if (g != null) g.Layer = -1;
+            Plugin.Log.LogWarning("[Inject] ABORTED, world textures left vanilla, modded decals show the vanilla Faction placeholder. Reason: " + why);
+        }
+
+        // Compare a vanilla layer between src (CPU data) and dst (read back from the GPU via a RenderTexture).
+        static bool VerifySample(Texture2DArray src, Texture2DArray dst, int baseLayer, out string why)
+        {
+            why = null;
+            int mip = Math.Max(0, Math.Min(src.mipmapCount - 1, 4)); int sz = Math.Max(1, 256 >> mip);
+            var rt = RenderTexture.GetTemporary(sz, sz, 0, RenderTextureFormat.ARGB32, src.graphicsFormat.ToString().Contains("SRGB") ? RenderTextureReadWrite.sRGB : RenderTextureReadWrite.Linear);
+            var read = new Texture2D(sz, sz, TextureFormat.RGBA32, false, !src.graphicsFormat.ToString().Contains("SRGB"));
+            var prev = RenderTexture.active;
+            try
+            {
+                foreach (int l in new[] { 0, baseLayer / 2, baseLayer - 1 })
+                {
+                    var tmp2 = new Texture2D(sz, sz, src.format, false, !src.graphicsFormat.ToString().Contains("SRGB"));
+                    Graphics.CopyTexture(dst, l, mip, tmp2, 0, 0);
+                    Graphics.Blit(tmp2, rt);
+                    UnityEngine.Object.Destroy(tmp2);
+                    RenderTexture.active = rt;
+                    read.ReadPixels(new Rect(0, 0, sz, sz), 0, 0); read.Apply();
+                    var a = src.GetPixels32(l, mip); var b = read.GetPixels32();
+                    long diff = 0; for (int i = 0; i < a.Length; i++) diff += Math.Abs(a[i].r - b[i].r) + Math.Abs(a[i].g - b[i].g) + Math.Abs(a[i].b - b[i].b);
+                    double avg = diff / (3.0 * a.Length);
+                    Plugin.V($"[Inject] verify layer {l} mip {mip}: mean diff {avg:F2}");
+                    if (avg > 8) { why = $"layer {l} differs (mean {avg:F1})"; return false; }
+                }
+                return true;
+            }
+            finally { RenderTexture.active = prev; RenderTexture.ReleaseTemporary(rt); UnityEngine.Object.Destroy(read); }
         }
 
         // Decals sample NORMAL_TEX too. Pick the flattest normal layer used by a vanilla decal, so glyphs don't show
@@ -217,7 +314,7 @@ namespace MoreDecals
             var ids = Brick.BRICK_INDEX.Where(b => b != null && b.IsDecal && b.VoxelMaterials != null && b.VoxelMaterials.Length > 0)
                 .Select(b => b.VoxelMaterials[0].normalID).Distinct().ToList();
             if (ids.Contains(-1)) return -1;
-            int best = TabDecals.DECAL_FACTION_CUSTOM_1.VoxelMaterials[0].normalID; double bestVar = double.MaxValue;
+            int best = TabDecals.DECAL_FACTION_CUSTOM_1.VoxelMaterials[0].normalID; double bestVar = double.MaxValue; // only runs after load
             try
             {
                 var n = loader.ta_voxelNormal;
@@ -266,6 +363,8 @@ namespace MoreDecals
     [HarmonyPatch(typeof(ActionBuild), nameof(ActionBuild.LeftClickUp))]
     internal static class Patch_BuildLeftClickUp
     {
+        internal static bool Applied;
+        static void Cleanup(Exception ex) { Applied = ex == null; }
         static void Prefix(ActionBuild __instance)
         {
             if (Picker.Selected == 0 || __instance.brick == null || !Glyphs.IsBankBrick((int)__instance.brick.ItemID)) return;
@@ -276,6 +375,22 @@ namespace MoreDecals
             bd.scale = (ushort)((bd.scale & 0x0FFF) | (local << 12));
             ActionBuild.brickData = bd;
             Plugin.V($"[Build] placing variant {Picker.Selected} as brick {bank} slot {local}.");
+        }
+    }
+
+    [HarmonyPatch(typeof(NetworkedBuilder), nameof(NetworkedBuilder.LocalVoxelAction))]
+    internal static class Patch_LocalVoxelAction
+    {
+        static void Prefix(ref VoxelActionData data, bool isMirror)
+        {
+            if (isMirror || Picker.Selected == 0 || data.type != VoxelActionType.build) return;
+            var bd = data.brickData;
+            if (!Glyphs.IsBankBrick(bd.brickId) || (bd.scale >> 12) != 0) return;
+            int local = Glyphs.Encode(Picker.Selected, out ushort bank);
+            bd.brickId = bank;
+            bd.scale = (ushort)((bd.scale & 0x0FFF) | (local << 12));
+            data.brickData = bd;
+            Plugin.V($"[Build] placing variant {Picker.Selected} as brick {bank} slot {local} (fallback).");
         }
     }
 
