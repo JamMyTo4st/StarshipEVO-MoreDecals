@@ -25,6 +25,8 @@ namespace MoreDecals
         internal static ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled, Verbose, InjectTextures, UseCodexEntries, ShowSelectionHint;
         internal static ConfigEntry<KeyCode> PickerKey;
+        internal static ConfigEntry<bool> GrowTexture;
+        internal static ConfigEntry<int> MaxExtraLayers;
         internal static string PluginDir;
 
         private void Awake()
@@ -36,6 +38,8 @@ namespace MoreDecals
             UseCodexEntries = Config.Bind("Decals", "UseCodexEntries", true, "Show the custom decals as entries in the Codex Decals tab (family 'Custom Decals'). The picker key stays available as a fallback.");
             ShowSelectionHint = Config.Bind("Decals", "ShowSelectionHint", false, "Show a small top-centre hint with the decal selected in the picker window.");
             InjectTextures = Config.Bind("Decals", "InjectTextures", true, "Add the decal images to the game's block texture array (after a strict self-check). Off: nothing texture related is touched and modded decals show the vanilla Faction placeholder.");
+            GrowTexture = Config.Bind("Decals", "GrowTexture", true, "v1.2: make the game create its block texture array with extra layers for the custom PNGs (lifts the 18 limit, up to 60). Off or if it fails: v1.1 behaviour (copy into the 18 free layers).");
+            MaxExtraLayers = Config.Bind("Decals", "MaxExtraLayers", 128, "Maximum layers GrowTexture may add (one per custom PNG; the save format allows 60 PNGs).");
             Verbose = Config.Bind("Debug", "VerboseLogging", true, "Log loading, placement and rendering details to BepInEx/LogOutput.log.");
             Glyphs.LoadAll();
             if (!Enabled.Value) { Log.LogInfo("MoreDecals disabled in config."); return; }
@@ -44,9 +48,11 @@ namespace MoreDecals
             // GameResourcesManager.AllocateResources(). TabSchematics..cctor then threw a NullReferenceException
             // (ItemInstanceResources not allocated yet), every schematic/help type stayed broken, and saves loaded
             // into an empty "void". All patches are now applied only after the game finished loading its codex.
+            if (InjectTextures.Value && GrowTexture.Value && Glyphs.CustomCount > 0) Grow.Install();
+            else Log.LogInfo($"[Grow] not installed (GrowTexture={GrowTexture.Value} InjectTextures={InjectTextures.Value} custom={Glyphs.CustomCount}).");
             UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
             EnsureRunner();
-            Log.LogInfo($"MoreDecals {MyPluginInfo.PLUGIN_VERSION} loaded, waiting for game resources. custom={Glyphs.CustomCount} PickerKey={PickerKey.Value} UseCodexEntries={UseCodexEntries.Value} InjectTextures={InjectTextures.Value}");
+            Log.LogInfo($"MoreDecals {MyPluginInfo.PLUGIN_VERSION} loaded, GrowTexture={GrowTexture.Value} MaxExtraLayers={MaxExtraLayers.Value}, waiting for game resources. custom={Glyphs.CustomCount} PickerKey={PickerKey.Value} UseCodexEntries={UseCodexEntries.Value} InjectTextures={InjectTextures.Value}");
         }
 
         static bool started;
@@ -100,7 +106,11 @@ namespace MoreDecals
             }
             int n = 0; foreach (var _ in h.GetPatchedMethods()) n++;
             Log.LogInfo($"[Start] game resources ready, patched {n} methods.");
-            if (InjectTextures.Value) Alt.Run();
+            if (InjectTextures.Value)
+            {
+                if (GrowTexture.Value && Grow.Verify()) { Alt.MarkReady(); Log.LogInfo("[Grow] using grown layers; fallback not used."); }
+                else { if (GrowTexture.Value) Log.LogWarning("[Grow] fallback used: in-place copy into free layers (max ~18)."); Alt.Run(); }
+            }
             else Log.LogInfo("[Inject] skipped (InjectTextures=false); modded decals show the vanilla Faction placeholder.");
             if (UseCodexEntries.Value)
             {

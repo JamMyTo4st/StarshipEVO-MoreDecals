@@ -14,6 +14,7 @@ namespace MoreDecals
     {
         public const string Tag = "b";
         static bool ready;
+        public static void MarkReady() { ready = true; }
 
         static void Use(HashSet<int> s, int v) { if (v >= 0) s.Add(v); }
 

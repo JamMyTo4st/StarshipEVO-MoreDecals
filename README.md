@@ -2,11 +2,11 @@
 
 A BepInEx 5 mod for Starship EVO that lets you place your own PNG images as decals.
 
-> **Tested in game:** v1.1.0 on game build 26w43a, November 2026.
+> **Tested in game:** v1.1.0 on game build 26w43a, November 2026. v1.2.0 is a test build (not yet confirmed in game).
 
 ## What it does
 
-- Loads the PNG files from `BepInEx\plugins\MoreDecals\Custom` (up to 18).
+- Loads the PNG files from `BepInEx\plugins\MoreDecals\Custom` (up to 60).
 - Adds them to the **Codex > Decals** tab as a **Custom Decals** family, each with its own icon and name. Drag one to the hotbar and place it like any other decal.
 - Placed decals are still saved as Codex Decals > FACTION #1-#4 decals. No new brick ids are added, so saves and blueprints still load for players without the mod; they see the FACTION placeholder instead.
 - A white shape on a transparent background takes the paint color like vanilla decals.
@@ -72,6 +72,8 @@ VerboseLogging = true
 | Decals | `PickerKey` | `Minus` | Key that opens and closes the fallback picker (Unity KeyCode name). |
 | Decals | `ShowSelectionHint` | `false` | Shows a small hint at the top of the screen with the decal picked in the picker. |
 | Decals | `InjectTextures` | `true` | Adds the images to the game's block textures after a self-check. Off: textures are not touched. |
+| Decals | `GrowTexture` | `true` | Create the block texture array with extra layers for your PNGs (lifts the 18 limit). Off: 1.1 behaviour. |
+| Decals | `MaxExtraLayers` | `128` | Maximum extra layers `GrowTexture` may add. |
 | Debug | `VerboseLogging` | `true` | Logs extra details to `LogOutput.log`. |
 
 ## Uninstall
@@ -81,7 +83,8 @@ VerboseLogging = true
 
 ## Notes / Game updates
 
-- **18 decals maximum.** Each image uses one free layer in the game's block texture array, and the current game has 18. Extra files are ignored and logged as a warning.
+- **Multiplayer.** Custom decals are saved as vanilla FACTION #1-#4 decals plus a slot number, so nothing new is sent over the network and players without the mod just see the FACTION placeholder. Everyone must have the same PNGs with the same file names (same order) in `Custom` to see the same decals; a different set or order shows whatever image is at that slot number. Share your `Custom` folder as a pack with your group. The extra texture layers are created locally on each PC.
+- **60 decals maximum.** The save format stores 4 bricks x 15 slots = 60. Since 1.2.0 the game's block texture array is created with one extra layer per PNG (`GrowTexture`, capped by `MaxExtraLayers`). If that fails, the mod falls back to the 1.1 method (the 18 free layers) and logs `[Grow] fallback used`.
 - **File order matters.** A placed decal stores its number (its position in file-name order), not the image. Adding, removing or renaming a file that sorts earlier changes what already placed decals show. Use prefixes like `01_logo.png`, `02_arrow.png` and add new files at the end.
 - **Other players need the same PNGs** with the same names in the same order to see them; otherwise they see the FACTION decal.
 - **The sample decal can be deleted** (or replaced). If you delete it, your own files move up one number, so do it before placing decals.
@@ -103,6 +106,7 @@ Open an issue on GitHub with what you did, what happened, and attach `BepInEx\Lo
 
 ## Changelog
 
+- **1.2.0**: Up to 60 custom decals: the block texture array is created with extra layers at load time (falls back to the 18 free layers). New options `GrowTexture`, `MaxExtraLayers`. Multiplayer notes.
 - **1.1.0**: Custom decals appear as Codex entries (Custom Decals family) with their own hotbar icons. Custom decals no longer stack with vanilla faction decals. Removed the status line that overlapped the HUD.
 - **1.0.0**: First public release. Custom PNG decals only, up to 18. Ships with a sample decal. Picker key is now Minus.
 - **0.3.0**: Removed built-in glyphs; only custom PNGs, in file-name order, with an empty-state picker.
