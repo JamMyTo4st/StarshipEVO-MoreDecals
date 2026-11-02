@@ -147,10 +147,10 @@ namespace MoreDecals
             {
                 Plugin.Log.LogInfo("[Grow] post-load props (original->grown): " + Props(Orig, Grown));
                 CopyProps(Orig, Grown); // re-assert in case anything changed after creation
-                foreach (int l in new[] { 1, OrigDepth / 2, OrigDepth - 1 })
+                if (Plugin.Verbose.Value) foreach (int l in new[] { 1, OrigDepth / 2, OrigDepth - 1 })
                     try { Plugin.Log.LogInfo($"[Grow] GPU original vs grown, layer {l} mean diff per mip: {Diag.CompareLayers(Orig, Grown, l)}"); } catch (Exception e) { Plugin.Log.LogWarning("[Grow] GPU compare skipped: " + e.Message); }
-                foreach (var gl in Glyphs.ById) if (gl != null && gl.Layer >= 0 && gl.Id <= 3) Diag.Glyph("Grow", Grown, gl);
-                try { foreach (int mip in new[] { 0, 1, 3 }) if (mip < Orig.mipmapCount && !Inject.VerifyMip(Orig, Grown, OrigDepth, mip, out string w)) Plugin.Log.LogWarning("[Grow] GPU mip check: " + w); }
+                if (Plugin.Verbose.Value) foreach (var gl in Glyphs.ById) if (gl != null && gl.Layer >= 0 && gl.Id <= 3) Diag.Glyph("Grow", Grown, gl);
+                if (Plugin.Verbose.Value) try { foreach (int mip in new[] { 0, 1, 3 }) if (mip < Orig.mipmapCount && !Inject.VerifyMip(Orig, Grown, OrigDepth, mip, out string w)) Plugin.Log.LogWarning("[Grow] GPU mip check: " + w); }
                 catch (Exception e) { Plugin.Log.LogWarning("[Grow] GPU mip check skipped: " + e.Message); }
             }
             Plugin.Log.LogInfo($"[Grow] post-load check: MAIN_TEX is grown array={same} depth={(g as Texture2DArray)?.depth} materialsWithOriginal={stale}");
