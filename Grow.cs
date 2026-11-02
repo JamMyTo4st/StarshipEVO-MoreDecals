@@ -86,10 +86,15 @@ namespace MoreDecals
                     tmp.LoadRawTextureData(raw.ToArray()); tmp.Apply(false, false);
                 }
                 // Both readable: CopyTexture copies GPU and CPU data (all mips). Apply re-uploads from CPU as the source of truth.
-                // build b: copy every mip of every layer explicitly (no mip regeneration, no recompression).
+                // build c: 1) CPU data (both readable: CopyTexture also copies CPU) + Apply to upload PNG layers;
+                // 2) THEN GPU-copy every vanilla layer/mip from the ORIGINAL's GPU texture over it, so the vanilla layers on
+                // the GPU are bit-identical to what the game uploaded (build b's Apply re-upload caused blocky walls).
                 for (int l = 0; l < src.depth; l++) for (int m = 0; m < src.mipmapCount; m++) Graphics.CopyTexture(src, l, m, dst, l, m);
                 for (int i = 0; i < extra; i++) for (int m = 0; m < src.mipmapCount; m++) Graphics.CopyTexture(tmps[i], 0, m, dst, src.depth + i, m);
                 dst.Apply(updateMipmaps: false, makeNoLongerReadable: false);
+                for (int l = 0; l < src.depth; l++) for (int m = 0; m < src.mipmapCount; m++) Graphics.CopyTexture(src, l, m, dst, l, m);
+                for (int i = 0; i < extra; i++) for (int m = 0; m < src.mipmapCount; m++) Graphics.CopyTexture(tmps[i], 0, m, dst, src.depth + i, m);
+                Plugin.Log.LogInfo($"[Grow] build c: CPU copy + Apply, then GPU CopyTexture of {src.depth} vanilla layers x {src.mipmapCount} mips from the original.");
                 CopyProps(src, dst);
                 Plugin.Log.LogInfo("[Grow] props after copy: " + Props(src, dst));
                 // CPU sanity check: a vanilla layer must match the original.
@@ -142,6 +147,9 @@ namespace MoreDecals
             {
                 Plugin.Log.LogInfo("[Grow] post-load props (original->grown): " + Props(Orig, Grown));
                 CopyProps(Orig, Grown); // re-assert in case anything changed after creation
+                foreach (int l in new[] { 1, OrigDepth / 2, OrigDepth - 1 })
+                    try { Plugin.Log.LogInfo($"[Grow] GPU original vs grown, layer {l} mean diff per mip: {Diag.CompareLayers(Orig, Grown, l)}"); } catch (Exception e) { Plugin.Log.LogWarning("[Grow] GPU compare skipped: " + e.Message); }
+                foreach (var gl in Glyphs.ById) if (gl != null && gl.Layer >= 0 && gl.Id <= 3) Diag.Glyph("Grow", Grown, gl);
                 try { foreach (int mip in new[] { 0, 1, 3 }) if (mip < Orig.mipmapCount && !Inject.VerifyMip(Orig, Grown, OrigDepth, mip, out string w)) Plugin.Log.LogWarning("[Grow] GPU mip check: " + w); }
                 catch (Exception e) { Plugin.Log.LogWarning("[Grow] GPU mip check skipped: " + e.Message); }
             }

@@ -81,8 +81,8 @@ namespace MoreDecals
                     }
                     finally { UnityEngine.Object.Destroy(tmp); }
                 }
-                var loader = UnityEngine.Object.FindObjectOfType<ResourcesLoader>();
                 ready = true;
+                foreach (var g in list.Take(Math.Min(3, done))) Diag.Glyph("Inject-B", arr, g);
                 Plugin.Log.LogInfo($"[Inject-B] OK: copied {done} glyphs in place into MAIN_TEX layers [{string.Join(",", list.Take(done).Select(x => x.Layer))}]; MAIN_TEX object unchanged (still {Shader.GetGlobalTexture("MAIN_TEX")?.name}).");
             }
             catch (Exception e) { Abort("exception: " + e); }
