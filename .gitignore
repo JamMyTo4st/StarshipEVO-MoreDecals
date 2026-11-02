@@ -5,3 +5,4 @@ lib/
 *.zip
 .vs/
 *.user
+Custom/*.png

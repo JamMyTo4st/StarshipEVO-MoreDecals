@@ -17,7 +17,7 @@ namespace MoreDecals
     // A modded decal is saved as one of the 4 vanilla "Faction custom" decal bricks (ids 309-312).
     // The chosen glyph is stored in the top 4 bits of BrickInstanceData.scale. Vanilla only uses bits 0-11
     // (BrickInstanceData.Scale / PackScale), but the full ushort is saved (MessagePack key 2) and synced (Mirror).
-    // 4 bricks x 15 values = 60 ids. v0.3.0: no built-in glyphs; ids 1..N are the custom PNGs from
+    // 4 bricks x 15 values = 60 ids. No built-in glyphs; ids 1..N are the custom PNGs from
     // BepInEx/plugins/MoreDecals/Custom in file-name order (N is capped by the free MAIN_TEX layers at injection).
     [BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
     public class Plugin : BaseUnityPlugin
@@ -32,7 +32,7 @@ namespace MoreDecals
             Log = Logger;
             PluginDir = Path.GetDirectoryName(Info.Location);
             Enabled = Config.Bind("Decals", "Enabled", true, "Load the extra decals, render them and allow placing them. Off: modded decals show the vanilla Faction placeholder.");
-            PickerKey = Config.Bind("Decals", "PickerKey", KeyCode.F8, "Key that opens/closes the More Decals picker window.");
+            PickerKey = Config.Bind("Decals", "PickerKey", KeyCode.Minus, "Key that opens/closes the More Decals picker window.");
             InjectTextures = Config.Bind("Decals", "InjectTextures", true, "Add the decal images to the game's block texture array (after a strict self-check). Off: nothing texture related is touched and modded decals show the vanilla Faction placeholder.");
             Verbose = Config.Bind("Debug", "VerboseLogging", true, "Log loading, placement and rendering details to BepInEx/LogOutput.log.");
             Glyphs.LoadAll();
@@ -144,7 +144,7 @@ namespace MoreDecals
             {
                 if (Input.GetKeyDown(Plugin.PickerKey.Value))
                 {
-                    if (!Plugin.Started) Plugin.Log.LogWarning("[Picker] F8 pressed but MoreDecals is not ready yet (see the [Start] waiting lines).");
+                    if (!Plugin.Started) Plugin.Log.LogWarning("[Picker] picker key pressed but MoreDecals is not ready yet (see the [Start] waiting lines).");
                     else { Picker.Open = !Picker.Open; Plugin.Log.LogInfo(Picker.Open ? "[Picker] opened" : "[Picker] closed"); }
                 }
             }
@@ -229,7 +229,7 @@ namespace MoreDecals
             finally { UnityEngine.Object.Destroy(src); }
         }
 
-        // v0.3.0: only custom PNGs, sorted by file name (ordinal, case-insensitive), ids 1..N. The id is saved in
+        // only custom PNGs, sorted by file name (ordinal, case-insensitive), ids 1..N. The id is saved in
         // the brick, so keep the same files/names on every machine. Files past the free MAIN_TEX layer count are
         // warned about at injection and not shown in the picker.
         public static void LoadAll()
