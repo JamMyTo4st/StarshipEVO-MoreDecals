@@ -4,6 +4,10 @@ A BepInEx 5 mod for Starship EVO that lets you place your own PNG images as deca
 
 > **Tested in game:** v1.3.0 on game build 26w43a, November 2026.
 
+![Custom Decals in the Codex](docs/codex-decals.png)
+
+*The Custom Decals family in the Codex > Decals tab (shipped A-Z / 0-9 letters).*
+
 ## What it does
 
 - Loads the PNG files from `BepInEx\plugins\MoreDecals\Custom` (up to 60) and adds them to the **Codex > Decals** tab as a **Custom Decals** family, each with its own icon and name.
