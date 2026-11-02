@@ -2,7 +2,7 @@
 
 A BepInEx 5 mod for Starship EVO that lets you place your own PNG images as decals. It ships with 36 letters and numbers (A-Z, 0-9) as ready-made PNGs.
 
-> **Tested in game:** v1.2.0 on game build 26w43a, November 2026. v1.3.0 only changes the shipped files (same code as 1.2.0).
+> **Tested in game:** v1.3.0 on game build 26w43a, November 2026.
 
 ## What it does
 
