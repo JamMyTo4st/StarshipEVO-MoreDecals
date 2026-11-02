@@ -17,7 +17,8 @@ namespace MoreDecals
     // A modded decal is saved as one of the 4 vanilla "Faction custom" decal bricks (ids 309-312).
     // The chosen glyph is stored in the top 4 bits of BrickInstanceData.scale. Vanilla only uses bits 0-11
     // (BrickInstanceData.Scale / PackScale), but the full ushort is saved (MessagePack key 2) and synced (Mirror).
-    // 4 bricks x 15 values = 60 variants: 1-48 built-in, 49-60 custom PNG slots.
+    // 4 bricks x 15 values = 60 ids. v0.3.0: no built-in glyphs; ids 1..N are the custom PNGs from
+    // BepInEx/plugins/MoreDecals/Custom in file-name order (N is capped by the free MAIN_TEX layers at injection).
     [BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
     public class Plugin : BaseUnityPlugin
     {
@@ -43,7 +44,7 @@ namespace MoreDecals
             // into an empty "void". All patches are now applied only after the game finished loading its codex.
             UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
             EnsureRunner();
-            Log.LogInfo($"MoreDecals {MyPluginInfo.PLUGIN_VERSION}-{Alt.Tag} loaded, waiting for game resources. Built-in={Glyphs.BuiltInCount} custom={Glyphs.CustomCount} PickerKey={PickerKey.Value} InjectTextures={InjectTextures.Value}");
+            Log.LogInfo($"MoreDecals {MyPluginInfo.PLUGIN_VERSION} loaded, waiting for game resources. custom={Glyphs.CustomCount} PickerKey={PickerKey.Value} InjectTextures={InjectTextures.Value}");
         }
 
         static bool started;
@@ -163,14 +164,9 @@ namespace MoreDecals
 
     internal static class Glyphs
     {
-        public const int MaxId = 60, BuiltInMax = 48, CustomFirst = 49, CustomSlots = 12;
-        static readonly string[] BuiltInOrder =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZ".Select(c => "letter_" + c)
-            .Concat("0123456789".Select(c => "digit_" + c))
-            .Concat(new[] { "sym_plus", "sym_minus", "sym_star", "sym_chevron_double", "sym_crosshair", "sym_gear", "sym_wrench", "sym_anchor", "sym_skull", "sym_info", "sym_question", "sym_no_entry" })
-            .ToArray();
+        public const int MaxId = 60, Size = 256; // 4 banks x 15 ids
         public static readonly Glyph[] ById = new Glyph[MaxId + 1];
-        public static int BuiltInCount, CustomCount;
+        public static int CustomCount;
         public static int NormalId = int.MinValue; // decided at injection
         static readonly HashSet<int> warned = new HashSet<int>();
 
@@ -186,73 +182,77 @@ namespace MoreDecals
         }
         public static void WarnOnce(int id, string msg) { if (warned.Add(id)) Plugin.Log.LogWarning(msg); }
 
+        // Any PNG size -> 256x256 RGBA32 with straight alpha (transparent pixels = 0,0,0,0 like the old glyphs).
+        // Resampling is alpha-weighted (premultiplied) so transparent areas do not bleed dark fringes; downscaling
+        // averages every source pixel under the target pixel, upscaling is bilinear.
         static Texture2D Load(byte[] png, string name)
         {
-            var t = new Texture2D(2, 2, TextureFormat.RGBA32, true) { name = "MoreDecals_" + name };
-            if (!t.LoadImage(png, false)) return null;
-            if (t.width != 256 || t.height != 256)
+            var src = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            try
             {
-                var r = new Texture2D(256, 256, TextureFormat.RGBA32, true) { name = t.name };
-                var px = new Color32[256 * 256];
-                for (int y = 0; y < 256; y++) for (int x = 0; x < 256; x++)
-                        px[y * 256 + x] = t.GetPixelBilinear((x + 0.5f) / 256f, (y + 0.5f) / 256f);
-                r.SetPixels32(px); UnityEngine.Object.Destroy(t); t = r;
+                if (!src.LoadImage(png, false) || src.width < 1 || src.height < 1) return null;
+                int w = src.width, h = src.height;
+                var sp = src.GetPixels32();
+                var px = new Color32[Size * Size];
+                for (int y = 0; y < Size; y++)
+                    for (int x = 0; x < Size; x++)
+                    {
+                        double r = 0, g = 0, b = 0, a = 0, n = 0;
+                        if (w > Size || h > Size)
+                        {
+                            int x0 = x * w / Size, x1 = Math.Max(x0 + 1, (x + 1) * w / Size);
+                            int y0 = y * h / Size, y1 = Math.Max(y0 + 1, (y + 1) * h / Size);
+                            for (int yy = y0; yy < y1 && yy < h; yy++)
+                                for (int xx = x0; xx < x1 && xx < w; xx++)
+                                { var p = sp[yy * w + xx]; double pa = p.a; r += p.r * pa; g += p.g * pa; b += p.b * pa; a += pa; n++; }
+                        }
+                        else
+                        {
+                            double fx = (x + 0.5) * w / Size - 0.5, fy = (y + 0.5) * h / Size - 0.5;
+                            int ix = (int)Math.Floor(fx), iy = (int)Math.Floor(fy); double tx = fx - ix, ty = fy - iy;
+                            for (int k = 0; k < 4; k++)
+                            {
+                                int dx = k & 1, dy = k >> 1;
+                                double wt = (dx == 1 ? tx : 1 - tx) * (dy == 1 ? ty : 1 - ty);
+                                int sx = Math.Min(w - 1, Math.Max(0, ix + dx)), sy = Math.Min(h - 1, Math.Max(0, iy + dy));
+                                var p = sp[sy * w + sx]; double pa = p.a * wt; r += p.r * pa; g += p.g * pa; b += p.b * pa; a += pa; n += wt;
+                            }
+                        }
+                        if (a <= 0 || n <= 0) { px[y * Size + x] = new Color32(0, 0, 0, 0); continue; }
+                        px[y * Size + x] = new Color32((byte)Math.Min(255, Math.Round(r / a)), (byte)Math.Min(255, Math.Round(g / a)), (byte)Math.Min(255, Math.Round(b / a)), (byte)Math.Min(255, Math.Round(a / n)));
+                    }
+                var t = new Texture2D(Size, Size, TextureFormat.RGBA32, true) { name = "MoreDecals_" + name };
+                t.SetPixels32(px);
+                t.Apply(true, false);
+                return t;
             }
-            t.Apply(true, false);
-            return t;
+            finally { UnityEngine.Object.Destroy(src); }
         }
 
+        // v0.3.0: only custom PNGs, sorted by file name (ordinal, case-insensitive), ids 1..N. The id is saved in
+        // the brick, so keep the same files/names on every machine. Files past the free MAIN_TEX layer count are
+        // warned about at injection and not shown in the picker.
         public static void LoadAll()
-        {
-            var asm = Assembly.GetExecutingAssembly();
-            for (int i = 0; i < BuiltInOrder.Length; i++)
-            {
-                using (var s = asm.GetManifestResourceStream("MoreDecals.Glyphs." + BuiltInOrder[i] + ".png"))
-                {
-                    if (s == null) { Plugin.Log.LogError("Missing embedded glyph " + BuiltInOrder[i]); continue; }
-                    var b = new byte[s.Length]; s.Read(b, 0, b.Length);
-                    var t = Load(b, BuiltInOrder[i]);
-                    if (t == null) { Plugin.Log.LogError("Bad embedded glyph " + BuiltInOrder[i]); continue; }
-                    ById[i + 1] = new Glyph { Id = i + 1, Name = BuiltInOrder[i].Substring(BuiltInOrder[i].IndexOf('_') + 1).Replace('_', ' '), Tex = t };
-                    BuiltInCount++;
-                }
-            }
-            LoadCustom();
-        }
-
-        // Custom PNGs: slot = explicit "NN_" prefix (01-12) or a stable FNV-1a hash of the lower-case file name.
-        // The id saved in the brick is 48 + slot, so the same file name gives the same id on every machine.
-        static void LoadCustom()
         {
             string dir = Path.Combine(Plugin.PluginDir ?? Paths.PluginPath, "Custom");
             try { Directory.CreateDirectory(dir); } catch { }
-            if (!Directory.Exists(dir)) return;
+            if (!Directory.Exists(dir)) { Plugin.Log.LogWarning("[Custom] folder missing and could not be created: " + dir); return; }
             var files = Directory.GetFiles(dir, "*.png").OrderBy(f => Path.GetFileName(f).ToLowerInvariant(), StringComparer.Ordinal).ToList();
-            var explicitFirst = files.Where(f => ExplicitSlot(Path.GetFileName(f)) > 0).Concat(files.Where(f => ExplicitSlot(Path.GetFileName(f)) == 0));
-            foreach (var f in explicitFirst)
+            if (files.Count == 0) { Plugin.Log.LogInfo("[Custom] no PNG files in " + dir + "; the picker will be empty."); return; }
+            int id = 0;
+            foreach (var f in files)
             {
                 string fn = Path.GetFileName(f);
-                int slot = ExplicitSlot(fn);
-                if (slot == 0) slot = (int)(Fnv(fn.ToLowerInvariant()) % CustomSlots) + 1;
-                int id = BuiltInMax + slot;
-                if (ById[id] != null) { Plugin.Log.LogWarning($"[Custom] REJECTED {fn}: slot {slot:00} already used by {ById[id].Name}. Rename it with a free 'NN_' prefix (01-12)."); continue; }
+                if (id >= MaxId) { Plugin.Log.LogWarning($"[Custom] IGNORED {fn}: more than {MaxId} files."); continue; }
                 Texture2D t = null;
                 try { t = Load(File.ReadAllBytes(f), fn); } catch (Exception e) { Plugin.Log.LogWarning($"[Custom] REJECTED {fn}: {e.Message}"); continue; }
                 if (t == null) { Plugin.Log.LogWarning($"[Custom] REJECTED {fn}: not a readable PNG."); continue; }
+                id++;
                 ById[id] = new Glyph { Id = id, Name = Path.GetFileNameWithoutExtension(fn), Tex = t };
                 CustomCount++;
-                Plugin.Log.LogInfo($"[Custom] loaded {fn} -> slot {slot:00} (id {id}).");
+                Plugin.Log.LogInfo($"[Custom] loaded {fn} -> id {id}.");
             }
         }
-
-        static int ExplicitSlot(string fn)
-        {
-            if (fn.Length > 3 && char.IsDigit(fn[0]) && char.IsDigit(fn[1]) && fn[2] == '_')
-            { int n = (fn[0] - '0') * 10 + (fn[1] - '0'); if (n >= 1 && n <= CustomSlots) return n; }
-            return 0;
-        }
-
-        static uint Fnv(string s) { uint h = 2166136261; foreach (char c in s) { h ^= c; h *= 16777619; } return h; }
     }
 
     // ---------- Texture injection: append the glyphs as extra layers of the voxel diffuse array (MAIN_TEX) ----------
@@ -526,19 +526,26 @@ namespace MoreDecals
             GUILayout.Label("Pick a decal, then hold any Codex Decals > FACTION #1-#4 decal and build as usual.");
             if (GUILayout.Button(Selected == 0 ? "> None (vanilla Faction decal)" : "None (vanilla Faction decal)")) { Selected = 0; Plugin.Log.LogInfo("[Picker] selected none (vanilla)"); }
             scroll = GUILayout.BeginScrollView(scroll);
-            Section("Built-in", 1, Glyphs.BuiltInMax);
-            Section("Custom (BepInEx/plugins/MoreDecals/Custom)", Glyphs.CustomFirst, Glyphs.MaxId);
+            int shown = Section("Custom (BepInEx/plugins/MoreDecals/Custom)", 1, Glyphs.MaxId);
+            if (shown == 0)
+            {
+                GUILayout.Space(8);
+                GUILayout.Label(Glyphs.CustomCount == 0
+                    ? "No custom decals yet.\n\nDrop PNG files into BepInEx/plugins/MoreDecals/Custom (square 256x256 recommended, white on a transparent background so they can be painted), then restart the game."
+                    : "Custom decals were found but could not be added to the game's textures (see BepInEx/LogOutput.log, [Inject-B] lines). They show the Faction placeholder.");
+            }
             GUILayout.EndScrollView();
             GUI.DragWindow();
         }
 
-        static void Section(string title, int from, int to)
+        static int Section(string title, int from, int to)
         {
             GUILayout.Label(title);
-            int col = 0; GUILayout.BeginHorizontal();
+            int col = 0, shown = 0; GUILayout.BeginHorizontal();
             for (int id = from; id <= to; id++)
             {
-                var g = Glyphs.ById[id]; if (g == null) continue;
+                var g = Glyphs.ById[id]; if (g == null || g.Layer < 0) continue;
+                shown++;
                 var prev = GUI.backgroundColor;
                 if (Selected == id) GUI.backgroundColor = Color.cyan;
                 if (GUILayout.Button(new GUIContent(g.Tex, g.Name), GUILayout.Width(64), GUILayout.Height(64))) { Selected = id; Plugin.Log.LogInfo($"[Picker] selected glyph {id} ({g.Name})"); }
@@ -546,6 +553,7 @@ namespace MoreDecals
                 if (++col == 8) { col = 0; GUILayout.EndHorizontal(); GUILayout.BeginHorizontal(); }
             }
             GUILayout.EndHorizontal();
+            return shown;
         }
     }
 

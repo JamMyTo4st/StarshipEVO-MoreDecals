@@ -54,7 +54,7 @@ namespace MoreDecals
                 var list = Glyphs.ById.Where(g => g != null).ToList();
                 int count = Math.Min(list.Count, order.Count);
                 if (count == 0) { Abort("no free MAIN_TEX layers found"); return; }
-                if (count < list.Count) Plugin.Log.LogWarning($"[Inject-B] only {count} free layers for {list.Count} decals; the first {count} (A, B, C...) get images, the rest show the placeholder.");
+                if (count < list.Count) Plugin.Log.LogWarning($"[Inject-B] only {count} free layers for {list.Count} decals; the first {count} custom PNGs (by file name) get images; IGNORED: {string.Join(", ", list.Skip(count).Select(x => x.Name))}. Remove extra files from the Custom folder.");
 
                 var flags = arr.mipmapCount > 1 ? UnityEngine.Experimental.Rendering.TextureCreationFlags.MipChain : UnityEngine.Experimental.Rendering.TextureCreationFlags.None;
                 int done = 0;
