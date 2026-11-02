@@ -23,7 +23,7 @@ namespace MoreDecals
     public class Plugin : BaseUnityPlugin
     {
         internal static ManualLogSource Log;
-        internal static ConfigEntry<bool> Enabled, Verbose, InjectTextures;
+        internal static ConfigEntry<bool> Enabled, Verbose, InjectTextures, UseCodexEntries, ShowSelectionHint;
         internal static ConfigEntry<KeyCode> PickerKey;
         internal static string PluginDir;
 
@@ -33,6 +33,8 @@ namespace MoreDecals
             PluginDir = Path.GetDirectoryName(Info.Location);
             Enabled = Config.Bind("Decals", "Enabled", true, "Load the extra decals, render them and allow placing them. Off: modded decals show the vanilla Faction placeholder.");
             PickerKey = Config.Bind("Decals", "PickerKey", KeyCode.Minus, "Key that opens/closes the More Decals picker window.");
+            UseCodexEntries = Config.Bind("Decals", "UseCodexEntries", true, "Show the custom decals as entries in the Codex Decals tab (family 'Custom Decals'). The picker key stays available as a fallback.");
+            ShowSelectionHint = Config.Bind("Decals", "ShowSelectionHint", false, "Show a small top-centre hint with the decal selected in the picker window.");
             InjectTextures = Config.Bind("Decals", "InjectTextures", true, "Add the decal images to the game's block texture array (after a strict self-check). Off: nothing texture related is touched and modded decals show the vanilla Faction placeholder.");
             Verbose = Config.Bind("Debug", "VerboseLogging", true, "Log loading, placement and rendering details to BepInEx/LogOutput.log.");
             Glyphs.LoadAll();
@@ -44,7 +46,7 @@ namespace MoreDecals
             // into an empty "void". All patches are now applied only after the game finished loading its codex.
             UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
             EnsureRunner();
-            Log.LogInfo($"MoreDecals {MyPluginInfo.PLUGIN_VERSION} loaded, waiting for game resources. custom={Glyphs.CustomCount} PickerKey={PickerKey.Value} InjectTextures={InjectTextures.Value}");
+            Log.LogInfo($"MoreDecals {MyPluginInfo.PLUGIN_VERSION} loaded, waiting for game resources. custom={Glyphs.CustomCount} PickerKey={PickerKey.Value} UseCodexEntries={UseCodexEntries.Value} InjectTextures={InjectTextures.Value}");
         }
 
         static bool started;
@@ -100,6 +102,16 @@ namespace MoreDecals
             Log.LogInfo($"[Start] game resources ready, patched {n} methods.");
             if (InjectTextures.Value) Alt.Run();
             else Log.LogInfo("[Inject] skipped (InjectTextures=false); modded decals show the vanilla Faction placeholder.");
+            if (UseCodexEntries.Value)
+            {
+                foreach (var t in new[] { typeof(Patch_FromItem), typeof(Patch_SlotIcon), typeof(Patch_Name), typeof(Patch_CanMerge) })
+                {
+                    try { h.CreateClassProcessor(t).Patch(); Log.LogInfo($"[Codex] {t.Name} applied."); }
+                    catch (Exception e) { Log.LogError($"[Codex] {t.Name} FAILED: {e.Message}"); }
+                }
+                try { CodexEntries.Add(); } catch (Exception e) { Log.LogError("[Codex] adding entries FAILED: " + e); }
+            }
+            else Log.LogInfo("[Codex] UseCodexEntries=false; use the picker key.");
         }
 
         internal static void V(string s) { if (Verbose.Value) Log.LogInfo(s); }
@@ -449,14 +461,15 @@ namespace MoreDecals
         static void Cleanup(Exception ex) { Applied = ex == null; }
         static void Prefix(ActionBuild __instance)
         {
-            if (Picker.Selected == 0 || __instance.brick == null || !Glyphs.IsBankBrick((int)__instance.brick.ItemID)) return;
+            int sel = CodexEntries.Current();
+            if (sel == 0 || __instance.brick == null || !Glyphs.IsBankBrick((int)__instance.brick.ItemID)) return;
             if (!ActionBuild.isValid || ActionBuild.isColliding || ActionBuild.DidCancelScaling) return;
-            int local = Glyphs.Encode(Picker.Selected, out ushort bank);
+            int local = Glyphs.Encode(sel, out ushort bank);
             var bd = ActionBuild.brickData;
             bd.brickId = bank;
             bd.scale = (ushort)((bd.scale & 0x0FFF) | (local << 12));
             ActionBuild.brickData = bd;
-            Plugin.Log.LogInfo($"[Place] glyph {Picker.Selected} written to brick {bank} slot {local} (scale=0x{bd.scale:X4}).");
+            Plugin.Log.LogInfo($"[Place] glyph {sel} written to brick {bank} slot {local} (scale=0x{bd.scale:X4}, from {(CodexEntries.HeldGlyph() != 0 ? "Codex/hotbar entry" : "picker")}).");
         }
     }
 
@@ -465,14 +478,15 @@ namespace MoreDecals
     {
         static void Prefix(ref VoxelActionData data, bool isMirror)
         {
-            if (isMirror || Picker.Selected == 0 || data.type != VoxelActionType.build) return;
+            int sel = CodexEntries.Current();
+            if (isMirror || sel == 0 || data.type != VoxelActionType.build) return;
             var bd = data.brickData;
             if (!Glyphs.IsBankBrick(bd.brickId) || (bd.scale >> 12) != 0) return;
-            int local = Glyphs.Encode(Picker.Selected, out ushort bank);
+            int local = Glyphs.Encode(sel, out ushort bank);
             bd.brickId = bank;
             bd.scale = (ushort)((bd.scale & 0x0FFF) | (local << 12));
             data.brickData = bd;
-            Plugin.Log.LogInfo($"[Place] glyph {Picker.Selected} written to brick {bank} slot {local} (scale=0x{bd.scale:X4}, fallback).");
+            Plugin.Log.LogInfo($"[Place] glyph {sel} written to brick {bank} slot {local} (scale=0x{bd.scale:X4}, fallback).");
         }
     }
 
@@ -513,11 +527,13 @@ namespace MoreDecals
                 Cursor.lockState = CursorLockMode.None; Cursor.visible = true;
                 win = GUI.Window(0x4D44, win, DrawWindow, "More Decals  (" + Plugin.PickerKey.Value + " to close)");
             }
-            else if (Selected != 0)
+            else if (Selected != 0 && Plugin.ShowSelectionHint.Value)
             {
+                // v1.1: optional, off by default, top-centre (the old bottom-left line overlapped the HP/energy HUD).
                 var held = Patch_BuildOnSelection.Held;
                 bool ok = held != null && Glyphs.IsBankBrick((int)held.ItemID);
-                GUI.Label(new Rect(20, Screen.height - 60, 700, 24), $"More Decals: {Glyphs.ById[Selected]?.Name ?? "?"}" + (ok ? "" : "  (hold any FACTION #1-#4 decal to place it)"));
+                string txt = $"More Decals: {Glyphs.ById[Selected]?.Name ?? "?"}" + (ok ? "" : "  (hold any FACTION #1-#4 decal)");
+                GUI.Label(new Rect(Screen.width / 2f - 250, 8, 500, 24), txt);
             }
         }
 
