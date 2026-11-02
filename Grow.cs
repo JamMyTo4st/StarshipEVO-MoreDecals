@@ -16,7 +16,7 @@ namespace MoreDecals
     {
         public static bool Hit, Ok;
         public static int OrigDepth = -1, NewDepth = -1;
-        public static Texture2DArray Grown;
+        public static Texture2DArray Grown, Orig;
         static Harmony h;
 
         public static void Install()
@@ -69,10 +69,8 @@ namespace MoreDecals
             try
             {
                 dst = new Texture2DArray(src.width, src.height, src.depth + extra, src.graphicsFormat, flags, src.mipmapCount)
-                {
-                    name = src.name, filterMode = src.filterMode, anisoLevel = src.anisoLevel, mipMapBias = src.mipMapBias,
-                    wrapModeU = src.wrapModeU, wrapModeV = src.wrapModeV, wrapModeW = src.wrapModeW
-                };
+                { name = src.name };
+                CopyProps(src, dst);
                 if (dst.format != src.format || dst.mipmapCount != src.mipmapCount || dst.graphicsFormat != src.graphicsFormat)
                 { Plugin.Log.LogWarning($"[Grow] new array came out {dst.format}/{dst.graphicsFormat}/{dst.mipmapCount}; fallback will be used."); UnityEngine.Object.Destroy(dst); return; }
                 for (int i = 0; i < extra; i++)
@@ -88,9 +86,12 @@ namespace MoreDecals
                     tmp.LoadRawTextureData(raw.ToArray()); tmp.Apply(false, false);
                 }
                 // Both readable: CopyTexture copies GPU and CPU data (all mips). Apply re-uploads from CPU as the source of truth.
-                for (int l = 0; l < src.depth; l++) Graphics.CopyTexture(src, l, dst, l);
-                for (int i = 0; i < extra; i++) Graphics.CopyTexture(tmps[i], 0, dst, src.depth + i);
-                dst.Apply(false, false);
+                // build b: copy every mip of every layer explicitly (no mip regeneration, no recompression).
+                for (int l = 0; l < src.depth; l++) for (int m = 0; m < src.mipmapCount; m++) Graphics.CopyTexture(src, l, m, dst, l, m);
+                for (int i = 0; i < extra; i++) for (int m = 0; m < src.mipmapCount; m++) Graphics.CopyTexture(tmps[i], 0, m, dst, src.depth + i, m);
+                dst.Apply(updateMipmaps: false, makeNoLongerReadable: false);
+                CopyProps(src, dst);
+                Plugin.Log.LogInfo("[Grow] props after copy: " + Props(src, dst));
                 // CPU sanity check: a vanilla layer must match the original.
                 foreach (int l in new[] { 1, src.depth / 2, src.depth - 1 })
                 {
@@ -98,7 +99,7 @@ namespace MoreDecals
                     for (int k = 0; k < a.Length; k += 97) if (!a[k].Equals(b[k])) throw new Exception($"CPU copy differs at layer {l}");
                 }
                 loader.ta_voxelDiffuse = dst; // ResourcesLoader.Awake now publishes this object everywhere
-                Grown = dst; NewDepth = dst.depth; Ok = true;
+                Grown = dst; Orig = src; NewDepth = dst.depth; Ok = true;
                 for (int i = 0; i < extra; i++) list[i].Layer = src.depth + i;
                 Plugin.Log.LogInfo($"[Grow] OK: VoxelDiffuse depth {OrigDepth} -> {NewDepth} (+{extra}), swapped before VOXEL_DIFFUSE/MAIN_TEX were set.");
                 for (int i = 0; i < extra; i++) Plugin.Log.LogInfo($"[Grow] layer {list[i].Layer} <- id {list[i].Id} '{list[i].Name}'");
@@ -108,6 +109,20 @@ namespace MoreDecals
             catch (Exception e) { foreach (var g in list) g.Layer = -1; Plugin.Log.LogWarning("[Grow] FAILED, fallback will be used: " + e.Message); }
             finally { foreach (var t in tmps) UnityEngine.Object.Destroy(t); if (dst != null) UnityEngine.Object.Destroy(dst); }
         }
+
+        static void CopyProps(Texture2DArray s, Texture2DArray d)
+        {
+            d.filterMode = s.filterMode; d.anisoLevel = s.anisoLevel; d.mipMapBias = s.mipMapBias;
+            d.wrapModeU = s.wrapModeU; d.wrapModeV = s.wrapModeV; d.wrapModeW = s.wrapModeW;
+        }
+
+        static string P(string n, object a, object b) => $"{n} {a}->{b}{(Equals(a, b) ? "" : " (DIFF)")}; ";
+        static string Props(Texture2DArray s, Texture2DArray d) =>
+            P("filter", s.filterMode, d.filterMode) + P("aniso", s.anisoLevel, d.anisoLevel) + P("mipBias", s.mipMapBias, d.mipMapBias) +
+            P("wrapU", s.wrapModeU, d.wrapModeU) + P("wrapV", s.wrapModeV, d.wrapModeV) + P("wrapW", s.wrapModeW, d.wrapModeW) +
+            P("format", s.format, d.format) + P("gfx(sRGB/linear)", s.graphicsFormat, d.graphicsFormat) + P("mips", s.mipmapCount, d.mipmapCount) +
+            P("size", s.width + "x" + s.height, d.width + "x" + d.height) + P("readable", s.isReadable, d.isReadable) + P("dimension", s.dimension, d.dimension) +
+            $"depth {s.depth}->{d.depth}; quality: masterTextureLimit={QualitySettings.masterTextureLimit} anisotropicFiltering={QualitySettings.anisotropicFiltering}";
 
         // Called after load. Returns true when the grown array is live; logs diagnostics.
         public static bool Verify()
@@ -123,6 +138,13 @@ namespace MoreDecals
                     if (m != null && m.HasProperty("MAIN_TEX") && m.GetTexture("MAIN_TEX") is Texture2DArray t && t != Grown && t.name == Grown.name) { stale++; if (stale <= 5) Plugin.Log.LogWarning($"[Grow] material '{m.name}' holds the ORIGINAL VoxelDiffuse (custom layers {OrigDepth}+ will not show there)."); }
             }
             catch (Exception e) { Plugin.V("[Grow] material scan skipped: " + e.Message); }
+            if (Orig != null && Grown != null)
+            {
+                Plugin.Log.LogInfo("[Grow] post-load props (original->grown): " + Props(Orig, Grown));
+                CopyProps(Orig, Grown); // re-assert in case anything changed after creation
+                try { foreach (int mip in new[] { 0, 1, 3 }) if (mip < Orig.mipmapCount && !Inject.VerifyMip(Orig, Grown, OrigDepth, mip, out string w)) Plugin.Log.LogWarning("[Grow] GPU mip check: " + w); }
+                catch (Exception e) { Plugin.Log.LogWarning("[Grow] GPU mip check skipped: " + e.Message); }
+            }
             Plugin.Log.LogInfo($"[Grow] post-load check: MAIN_TEX is grown array={same} depth={(g as Texture2DArray)?.depth} materialsWithOriginal={stale}");
             if (!same) { foreach (var x in Glyphs.ById) if (x != null) x.Layer = -1; Plugin.Log.LogWarning("[Grow] MAIN_TEX is not the grown array; fallback used."); return false; }
             return true;

@@ -52,7 +52,7 @@ namespace MoreDecals
             else Log.LogInfo($"[Grow] not installed (GrowTexture={GrowTexture.Value} InjectTextures={InjectTextures.Value} custom={Glyphs.CustomCount}).");
             UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
             EnsureRunner();
-            Log.LogInfo($"MoreDecals {MyPluginInfo.PLUGIN_VERSION} loaded, GrowTexture={GrowTexture.Value} MaxExtraLayers={MaxExtraLayers.Value}, waiting for game resources. custom={Glyphs.CustomCount} PickerKey={PickerKey.Value} UseCodexEntries={UseCodexEntries.Value} InjectTextures={InjectTextures.Value}");
+            Log.LogInfo($"MoreDecals {MyPluginInfo.PLUGIN_VERSION} loaded (build b), GrowTexture={GrowTexture.Value} MaxExtraLayers={MaxExtraLayers.Value}, waiting for game resources. custom={Glyphs.CustomCount} PickerKey={PickerKey.Value} UseCodexEntries={UseCodexEntries.Value} InjectTextures={InjectTextures.Value}");
         }
 
         static bool started;
@@ -382,7 +382,7 @@ namespace MoreDecals
             return true;
         }
 
-        static bool VerifyMip(Texture2DArray src, Texture2DArray dst, int baseLayer, int mip, out string why)
+        internal static bool VerifyMip(Texture2DArray src, Texture2DArray dst, int baseLayer, int mip, out string why)
         {
             why = null;
             int sz = Math.Max(1, 256 >> mip);
